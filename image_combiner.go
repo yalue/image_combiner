@@ -1,10 +1,10 @@
-// The image combiner program is a file which takes 3 (presumably grayscale)
-// images and combines them into a singe image file, using each input as a
-// different color channel.
+// The image combiner program takes multiple images and an associated color for
+// each. It multiplies the overall brightness for each pixel in each input
+// image by the corresponding color for that image. All such colored pixels are
+// added together in the output image.
 package main
 
 import (
-	"flag"
 	"fmt"
 	_ "github.com/spakin/netpbm"
 	_ "golang.org/x/image/bmp"
@@ -14,21 +14,181 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"os"
+	"strconv"
 )
 
-// Converts a given arbitrary RGB color to a single channel in grayscale.
-func convertToGrayscale(c color.Color) uint32 {
+// Implements the color interface, but uses float colors.
+type floatColor struct {
+	r float32
+	g float32
+	b float32
+}
+
+func (c floatColor) Add(toAdd color.Color) floatColor {
+	converted := convertToFloatColor(toAdd)
+	return floatColor{
+		r: c.r + converted.r,
+		g: c.g + converted.g,
+		b: c.b + converted.b,
+	}
+}
+
+func (c floatColor) Multiply(scale color.Color) floatColor {
+	converted := convertToFloatColor(scale)
+	return floatColor{
+		r: c.r * converted.r,
+		g: c.g * converted.g,
+		b: c.b * converted.b,
+	}
+}
+
+func (c floatColor) Scale(scale float32) floatColor {
+	return floatColor{
+		r: c.r * scale,
+		g: c.g * scale,
+		b: c.b * scale,
+	}
+}
+
+func (c floatColor) RGBA() (r, g, b, a uint32) {
+	var red, green, blue uint32
+	if c.r >= 1.0 {
+		red = 0xffff
+	} else {
+		red = uint32(c.r * float32(0xffff))
+	}
+	if c.g >= 1.0 {
+		green = 0xffff
+	} else {
+		green = uint32(c.g * float32(0xffff))
+	}
+	if c.b >= 1.0 {
+		blue = 0xffff
+	} else {
+		blue = uint32(c.b * float32(0xffff))
+	}
+	return red, green, blue, 0xffff
+}
+
+func (c floatColor) String() string {
+	return fmt.Sprintf("%02x%02x%02x", uint8(c.r*255.0), uint8(c.g*255.0),
+		uint8(c.b*255.0))
+}
+
+func convertToFloatColor(c color.Color) floatColor {
+	tryResult, ok := c.(floatColor)
+	if ok {
+		return tryResult
+	}
 	r, g, b, _ := c.RGBA()
-	return (r + g + b) / 3
+	return floatColor{
+		r: float32(r) / 0xffff,
+		g: float32(g) / 0xffff,
+		b: float32(b) / 0xffff,
+	}
+}
+
+type floatColorImage struct {
+	pixels []floatColor
+	w, h   int
+}
+
+func (f *floatColorImage) Bounds() image.Rectangle {
+	return image.Rect(0, 0, f.w, f.h)
+}
+
+func (f *floatColorImage) ColorModel() color.Model {
+	return color.ModelFunc(func(c color.Color) color.Color {
+		return convertToFloatColor(c)
+	})
+}
+
+func (f *floatColorImage) At(x, y int) color.Color {
+	if (x < 0) || (y < 0) || (x >= f.w) || (y >= f.h) {
+		return color.Black
+	}
+	return f.pixels[(y*f.w)+x]
+}
+
+func (f *floatColorImage) Add(x, y int, toAdd color.Color) {
+	if (x < 0) || (y < 0) || (x >= f.w) || (y >= f.h) {
+		return
+	}
+	pixel := f.pixels[(y*f.w)+x]
+	f.pixels[(y*f.w)+x] = pixel.Add(toAdd)
+}
+
+func newFloatColorImage(w, h int) (*floatColorImage, error) {
+	if (w <= 0) || (h <= 0) {
+		return nil, fmt.Errorf("Image bounds must be positive")
+	}
+	return &floatColorImage{
+		w:      w,
+		h:      h,
+		pixels: make([]floatColor, w*h),
+	}, nil
+}
+
+func parse24BitColor(value string) (floatColor, error) {
+	parsed, e := strconv.ParseUint(value, 16, 32)
+	if e != nil {
+		return floatColor{}, fmt.Errorf("Couldn't parse color %s: %s", value,
+			e)
+	}
+	return floatColor{
+		r: float32((parsed>>16)&0xff) / 255.0,
+		g: float32((parsed>>8)&0xff) / 255.0,
+		b: float32(parsed&0xff) / 255.0,
+	}, nil
+}
+
+func parse48BitColor(value string) (floatColor, error) {
+	parsed, e := strconv.ParseUint(value, 16, 64)
+	if e != nil {
+		return floatColor{}, fmt.Errorf("Couldn't parse color %s: %s", value,
+			e)
+	}
+	return floatColor{
+		r: float32((parsed>>32)&0xffff) / 65535.0,
+		g: float32((parsed>>16)&0xffff) / 65535.0,
+		b: float32(parsed&0xffff) / 65535.0,
+	}, nil
+}
+
+// Parses an input hex string with either 24-bit or 48-bit RGB color as a float
+// color. Returns an error if the input value is invalid.
+func parseFloatColor(value string) (floatColor, error) {
+	if len(value) == 6 {
+		return parse24BitColor(value)
+	}
+	if len(value) == 12 {
+		return parse48BitColor(value)
+	}
+	return floatColor{}, fmt.Errorf("Need a 24- or 48-bit RGB color, got %s",
+		value)
+}
+
+// This contains a filename and parsed color value, parsed from the command
+// line arguments.
+type imageInput struct {
+	filename   string
+	colorValue floatColor
+}
+
+// Converts a given arbitrary RGB color to a single brightness value.
+func convertToBrightness(c color.Color) float32 {
+	r, g, b, _ := c.RGBA()
+	return float32(r+g+b) / (3.0 * 65535.0)
 }
 
 // Takes 3 image filenames and returns the maximum dimensions of all of them.
-func getMaxDimensions(imageFiles []string) (int, int, error) {
+func getMaxDimensions(imageFiles []imageInput) (int, int, error) {
 	var maxW, maxH, w, h int
 	var pic image.Image
 	var e error
 	var f *os.File
-	for _, filename := range imageFiles {
+	for _, inputPic := range imageFiles {
+		filename := inputPic.filename
 		fmt.Printf("Getting dimensions for %s...\n", filename)
 		f, e = os.Open(filename)
 		if e != nil {
@@ -53,45 +213,34 @@ func getMaxDimensions(imageFiles []string) (int, int, error) {
 	return maxW, maxH, nil
 }
 
-func setChannel(dest *image.RGBA64, pic image.Image, channel int) {
+func addColor(dest *floatColorImage, pic image.Image, addColor floatColor) {
 	w := pic.Bounds().Dx()
 	h := pic.Bounds().Dy()
-	var c color.RGBA64
-	var grayscale uint16
+	var scale float32
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			grayscale = uint16(convertToGrayscale(pic.At(x, y)))
-			c = dest.RGBA64At(x, y)
-			switch channel {
-			case 0:
-				c.R = grayscale
-			case 1:
-				c.G = grayscale
-			case 2:
-				c.B = grayscale
-			default:
-				panic("Bad channel")
-			}
-			dest.Set(x, y, c)
+			scale = convertToBrightness(pic.At(x, y))
+			dest.Add(x, y, addColor.Scale(scale))
 		}
 	}
 }
 
-func combineImages(imageFiles []string) (image.Image, error) {
+func combineImages(imageFiles []imageInput) (image.Image, error) {
 	var pic image.Image
 	var f *os.File
-	if len(imageFiles) > 3 {
-		return nil, fmt.Errorf("Using more than 3 channels is unsupported.")
-	}
 	w, h, e := getMaxDimensions(imageFiles)
 	if e != nil {
 		return nil, fmt.Errorf("Failed getting image dimensions: %s", e)
 	}
 	fmt.Printf("Combining images into a %dx%d image.\n", w, h)
-	combined := image.NewRGBA64(image.Rect(0, 0, w, h))
-	for i, imageFile := range imageFiles {
-		fmt.Printf("Setting channel %d using %s...\n", i+1, imageFile)
-		f, e = os.Open(imageFile)
+	combined, e := newFloatColorImage(w, h)
+	if e != nil {
+		return nil, fmt.Errorf("Failed creating new image: %s", e)
+	}
+	for _, imageFile := range imageFiles {
+		fmt.Printf("Setting color %s using %s...\n", imageFile.colorValue,
+			imageFile.filename)
+		f, e = os.Open(imageFile.filename)
 		if e != nil {
 			return nil, fmt.Errorf("Failed opening file %s: %s", imageFile, e)
 		}
@@ -101,35 +250,58 @@ func combineImages(imageFiles []string) (image.Image, error) {
 			return nil, fmt.Errorf("Failed decoding image %s: %s", imageFile,
 				e)
 		}
-		setChannel(combined, pic, i)
+		addColor(combined, pic, imageFile.colorValue)
 		pic = nil
 		f.Close()
 	}
 	return combined, nil
 }
 
+func printUsage() {
+	fmt.Printf("Usage: %s <image 1 path> <image 1 color> <image 2> "+
+		"<image 2 color> ... <output filename.jpg>\n\n"+
+		"The image colors must be either 6 or 12 hex digits (24 or 48-bit "+
+		"RGB)\n", os.Args[0])
+}
+
+// Parses the command line arguments. Returns an error if the arguments are
+// invalid for any reason. Returns a slice of input images and colors, the
+// output filename, or an error if one occurs.
+func parseArguments() ([]imageInput, string, error) {
+	var e error
+	if len(os.Args) <= 2 {
+		return nil, "", fmt.Errorf("Invalid arguments: at least one " +
+			"image/color must be provided")
+	}
+	if (len(os.Args) % 2) != 0 {
+		return nil, "", fmt.Errorf("Invalid arguments: each image must have " +
+			"a corresponding color")
+	}
+	outputName := os.Args[len(os.Args)-1]
+	// Subtract the program name and output filename from the args array to get
+	// the number of image and color arguments. Divide by 2 to get # of pairs.
+	toReturn := make([]imageInput, (len(os.Args)-2)/2)
+	var parsedColor floatColor
+	for i := range toReturn {
+		toReturn[i].filename = os.Args[(i*2)+1]
+		parsedColor, e = parseFloatColor(os.Args[(i*2)+2])
+		if e != nil {
+			return nil, "", fmt.Errorf("Invalid color for image %s: %s",
+				toReturn[i].filename, e)
+		}
+		toReturn[i].colorValue = parsedColor
+	}
+	return toReturn, outputName, nil
+}
+
 func run() int {
-	var redName string
-	var greenName string
-	var blueName string
-	var outputName string
-	flag.StringVar(&redName, "r", "", "The image to use for the R channel.")
-	flag.StringVar(&greenName, "g", "", "The image to use for the G channel.")
-	flag.StringVar(&blueName, "b", "", "The image to use for the B channel.")
-	flag.StringVar(&outputName, "output", "", "The filename to create. "+
-		"Output files will be JPEG-format.")
-	flag.Parse()
-	if (redName == "") || (greenName == "") || (blueName == "") {
-		fmt.Printf("An image must be supplied for every color.\n")
-		fmt.Printf("Run with -h for more information.\n")
+	toCombine, outputName, e := parseArguments()
+	if e != nil {
+		fmt.Printf("Failed parsing arguments: %s\n", e)
+		printUsage()
 		return 1
 	}
-	if outputName == "" {
-		fmt.Printf("An output filename is required.\n")
-		fmt.Printf("Run with -h for more information.\n")
-		return 1
-	}
-	outputImage, e := combineImages([]string{redName, greenName, blueName})
+	outputImage, e := combineImages(toCombine)
 	if e != nil {
 		fmt.Printf("Error combining images: %s\n", e)
 		return 1
