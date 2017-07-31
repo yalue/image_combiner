@@ -8,6 +8,7 @@ import (
 	"fmt"
 	_ "github.com/spakin/netpbm"
 	_ "golang.org/x/image/bmp"
+	"golang.org/x/image/colornames"
 	"image"
 	"image/color"
 	_ "image/gif"
@@ -15,9 +16,11 @@ import (
 	_ "image/png"
 	"os"
 	"strconv"
+	"strings"
 )
 
-// Implements the color interface, but uses float colors.
+// Implements the color interface, but uses floating-point colors for easier
+// multiplication.
 type floatColor struct {
 	r float32
 	g float32
@@ -155,9 +158,31 @@ func parse48BitColor(value string) (floatColor, error) {
 	}, nil
 }
 
+// Attempts to parse a color using an SVG color name. Returns false if a color
+// with the given name wasn't found.
+func parseNamedColor(name string) (floatColor, bool) {
+	name = strings.ToLower(name)
+	namedColor := colornames.Map[name]
+	// Since a map returns a zero-value if the key doesn't exist, and no
+	// visible will have a zero alpha value, we use an alpha value of zero to
+	// detect that the given name wasn't in the colornames map.
+	_, _, _, a := namedColor.RGBA()
+	if a == 0 {
+		return convertToFloatColor(namedColor), false
+	}
+	return convertToFloatColor(namedColor), true
+}
+
 // Parses an input hex string with either 24-bit or 48-bit RGB color as a float
 // color. Returns an error if the input value is invalid.
 func parseFloatColor(value string) (floatColor, error) {
+	// First check if a named color was given.
+	namedColor, nameOK := parseNamedColor(value)
+	if nameOK {
+		return namedColor, nil
+	}
+	// Allow hex color values starting with a single '#'
+	value = strings.TrimPrefix(value, "#")
 	if len(value) == 6 {
 		return parse24BitColor(value)
 	}
@@ -260,8 +285,8 @@ func combineImages(imageFiles []imageInput) (image.Image, error) {
 func printUsage() {
 	fmt.Printf("Usage: %s <image 1 path> <image 1 color> <image 2> "+
 		"<image 2 color> ... <output filename.jpg>\n\n"+
-		"The image colors must be either 6 or 12 hex digits (24 or 48-bit "+
-		"RGB)\n", os.Args[0])
+		"The image colors may an SVG color name, 6 hex digits, or 12 hex "+
+		"digits (for 48-bit color).\n", os.Args[0])
 }
 
 // Parses the command line arguments. Returns an error if the arguments are
