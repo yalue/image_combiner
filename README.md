@@ -9,6 +9,9 @@ format.
 Usage
 -----
 
+The program can be either compiled from source code (see the Compilation
+section below), or downloaded from [the releases page](https://github.com/yalue/image_combiner/releases).
+
 The program takes pairs of command-line arguments representing input images and
 colors to assign in the output image. The final argument is the name of the
 output image, which should be a .jpg value:
