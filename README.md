@@ -14,14 +14,25 @@ section below), or downloaded from [the releases page](https://github.com/yalue/
 
 The program takes pairs of command-line arguments representing input images and
 colors to assign in the output image. The final argument is the name of the
-output image, which should be a .jpg value:
+output image, which should be a .jpg value.  Colors may either be specified
+using an SVG color name, 6 hex digits (for 24-bit color), or 12 hex digits
+(for 48-bit color).
 
 ```bash
 # The output image, image_abc.jpg, will contain a red 'A', a green 'B', and a
 # purple 'C'.
-./image_combiner examples/image_a.png red \
+./image_combiner \
+    examples/image_a.png red \
     examples/image_b.gif green \
-    examples/image_c.pgm purple \
+    examples/image_c.pgm blueviolet \
+    image_abc.jpg
+
+# Alternatively, using hex digits instead of some color names, including 48-bit
+# purple (rrrrggggbbbb) for image_c.pgm.
+./image_combiner \
+    examples/image_a.png red \
+    examples/image_b.gif 008000 \
+    examples/image_c.pgm 77770999cccc \
     image_abc.jpg
 ```
 

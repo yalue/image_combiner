@@ -74,8 +74,8 @@ func (c floatColor) RGBA() (r, g, b, a uint32) {
 }
 
 func (c floatColor) String() string {
-	return fmt.Sprintf("%02x%02x%02x", uint8(c.r*255.0), uint8(c.g*255.0),
-		uint8(c.b*255.0))
+	return fmt.Sprintf("%04x%04x%04x", uint16(c.r*0xffff), uint16(c.g*0xffff),
+		uint16(c.b*0xffff))
 }
 
 func convertToFloatColor(c color.Color) floatColor {
